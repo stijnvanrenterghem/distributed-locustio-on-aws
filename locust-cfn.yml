@@ -1,0 +1,755 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  HTTP(S) load-testing stack based on Locust (https://locust.io/).
+  This template deploys an Elastic Beanstalk environment in a
+  custom two-tier, three-AZ VPC.
+
+Parameters:
+
+  TargetUrl:
+    Description: Target URL for the load test
+    Type: String
+    Default: http://localhost
+
+  ApplicationName:
+    Description: Name of your application
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: Locust
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+
+  InstanceType:
+    Description: The instance type for the dev environment
+    Type: String
+    Default: c4.large
+    AllowedValues:
+      - c4.large
+
+  AutoScalingMinInstanceCount:
+    Description: Minimum number of EC2 instances for Auto Scaling
+    Type: Number
+    MinValue: 1
+    MaxValue: 20
+    Default: 3
+    ConstraintDescription: Specify a number between 1 - 20
+
+  AutoScalingMaxInstanceCount:
+    Description: Maximum number of EC2 instances for Auto Scaling
+    Type: Number
+    MinValue: 1
+    MaxValue: 20
+    Default: 6
+    ConstraintDescription: Specify a number between 1 - 20
+
+  SolutionStackName:
+    Description: Refer to https://docs.aws.amazon.com/elasticbeanstalk/latest/platforms/platforms-supported.html#platforms-supported.javase
+    Type: String
+    Default: 64bit Amazon Linux 2018.03 v2.8.2 running Java 8
+    AllowedValues:
+      - 64bit Amazon Linux 2018.03 v2.8.2 running Java 8
+
+Mappings:
+
+  CIDRMap:
+    VPC:
+      CIDR: 10.50.0.0/16
+    PublicSubnetA:
+      CIDR: 10.50.0.0/24
+    PublicSubnetB:
+      CIDR: 10.50.1.0/24
+    PublicSubnetC:
+      CIDR: 10.50.2.0/24
+    PrivateSubnetA:
+      CIDR: 10.50.64.0/19
+    PrivateSubnetB:
+      CIDR: 10.50.96.0/19
+    PrivateSubnetC:
+      CIDR: 10.50.128.0/19
+
+Resources:
+
+  # -- VPC
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [ CIDRMap, VPC, CIDR ]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-VPC"
+
+# -- Public Subnets
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [ CIDRMap, PublicSubnetA, CIDR ]
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PublicSubnetA"
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [ CIDRMap, PublicSubnetB, CIDR ]
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PublicSubnetB"
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [ CIDRMap, PublicSubnetC, CIDR ]
+      AvailabilityZone: !Select
+        - 2
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PublicSubnetC"
+
+# -- Private Subnets
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [ CIDRMap, PrivateSubnetA, CIDR ]
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateSubnetA"
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [ CIDRMap, PrivateSubnetB, CIDR ]
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateSubnetB"
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [ CIDRMap, PrivateSubnetC, CIDR ]
+      AvailabilityZone: !Select
+        - 2
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateSubnetC"
+
+# -- Internet Gateway
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-InternetGateway"
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PublicRouteTable"
+
+  PublicRouteTableDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+# Enable traffic to Internet for Public Subnets
+
+  PublicSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetC
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetNetworkAclAssociationA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      NetworkAclId: !GetAtt VPC.DefaultNetworkAcl
+
+  PublicSubnetNetworkAclAssociationB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      NetworkAclId: !GetAtt VPC.DefaultNetworkAcl
+
+  PublicSubnetNetworkAclAssociationC:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetC
+      NetworkAclId: !GetAtt VPC.DefaultNetworkAcl
+
+# Allow traffic to Locust application
+
+  ELBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP ingress
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-ELBSecurityGroup"
+
+  ELBSecurityGroupToAppEgress:
+    Type: AWS::EC2::SecurityGroupEgress  # Prevent circular references within Security Group
+    Properties:
+      GroupId: !Ref ELBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationSecurityGroupId: !Ref AppSecurityGroup
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable access from ELB to app
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - SourceSecurityGroupId: !Ref ELBSecurityGroup
+        IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-AppSecurityGroup"
+
+  AppSecurityGroupFromELBIngress:
+    Type: AWS::EC2::SecurityGroupIngress  # Prevent circular references within Security Group
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref ELBSecurityGroup
+
+# -- NAT Gateways
+
+  NatGatewayA:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIPA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+
+  NatGatewayB:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIPB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+
+  NatGatewayC:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIPC.AllocationId
+      SubnetId: !Ref PublicSubnetC
+
+  NatEIPA:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatEIPB:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatEIPC:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+# Enable traffic to Internet for Private Subnets
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateRouteTableA"
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateRouteTableB"
+
+  PrivateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateRouteTableC"
+
+  PrivateRouteTableNatRouteA:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+
+  PrivateRouteTableNatRouteB:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+
+  PrivateRouteTableNatRouteC:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableC
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayC
+
+  PrivateSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  PrivateSubnetRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTableC
+
+  # -- Elastic Beanstalk
+
+  ElasticBeanstalkServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": { "Service": [ "elasticbeanstalk.amazonaws.com" ]},
+            "Action": [ "sts:AssumeRole" ]
+          }]
+        }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkEnhancedHealth
+        - arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkService
+
+  Application:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Ref ApplicationName
+
+  Environment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref Application
+      EnvironmentName: !Ref Application # Reuse Application name as Environment name
+      TemplateName: !Ref ConfigurationTemplate
+    DependsOn:
+      - ConfigurationTemplate
+
+  ConfigurationTemplate:
+    Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+    Properties:
+      ApplicationName: !Ref Application
+      SolutionStackName: !Ref SolutionStackName
+      OptionSettings:
+
+        # -- Elastic Beanstalk Environment
+
+      - Namespace: aws:elasticbeanstalk:environment
+        OptionName: EnvironmentType
+        Value: LoadBalanced
+
+      - Namespace: aws:elasticbeanstalk:environment
+        OptionName: LoadBalancerType
+        Value: application
+
+      - Namespace: aws:elasticbeanstalk:environment
+        OptionName: ServiceRole
+        Value: !Ref ElasticBeanstalkServiceRole
+
+        # -- Elastic Beanstalk Auto Scaling
+
+      - Namespace: aws:autoscaling:asg
+        OptionName: MinSize
+        Value: !Ref AutoScalingMinInstanceCount
+
+      - Namespace: aws:autoscaling:asg
+        OptionName: MaxSize
+        Value: !Ref AutoScalingMaxInstanceCount
+
+      - Namespace: aws:autoscaling:launchconfiguration
+        OptionName: SecurityGroups
+        Value: !Ref AppSecurityGroup
+
+      - Namespace: aws:autoscaling:launchconfiguration
+        OptionName: InstanceType
+        Value: !Ref InstanceType
+
+      - Namespace: aws:autoscaling:launchconfiguration
+        OptionName: IamInstanceProfile
+        Value: !Ref AppInstanceProfile
+
+      - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+        OptionName: RollingUpdateEnabled
+        Value: true
+
+      - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+        OptionName: RollingUpdateType
+        Value: Health
+
+      - Namespace: aws:autoscaling:trigger
+        OptionName: MeasureName
+        Value: CPUUtilization
+
+      - Namespace: aws:autoscaling:trigger
+        OptionName: Unit
+        Value: Percent
+
+      - Namespace: aws:autoscaling:trigger
+        OptionName: UpperThreshold
+        Value: 80
+
+      - Namespace: aws:autoscaling:trigger
+        OptionName: LowerThreshold
+        Value: 40
+
+      - Namespace: aws:autoscaling:trigger
+        OptionName: BreachDuration
+        Value: 1
+
+      - Namespace: aws:autoscaling:trigger
+        OptionName: Period
+        Value: 1
+
+        # -- Elastic Beanstalk Health Reporting
+
+      - Namespace: aws:elasticbeanstalk:healthreporting:system
+        OptionName: SystemType
+        Value: "enhanced"
+
+      - Namespace: aws:elasticbeanstalk:healthreporting:system
+        OptionName: SystemType
+        Value: "enhanced"
+
+        # Note: '60' = enable metric ("every 60s"), 'null' = disable metric
+      - Namespace: aws:elasticbeanstalk:healthreporting:system
+        OptionName: ConfigDocument
+        Value:  '{
+                  "Version": 1,
+                  "CloudWatchMetrics": {
+                    "Instance": {
+                      "ApplicationLatencyP10": 60,
+                      "ApplicationLatencyP50": 60,
+                      "ApplicationLatencyP75": 60,
+                      "ApplicationLatencyP85": 60,
+                      "ApplicationLatencyP90": 60,
+                      "ApplicationLatencyP95": 60,
+                      "ApplicationLatencyP99": 60,
+                      "ApplicationLatencyP99.9": 60,
+                      "ApplicationRequests2xx": 60,
+                      "ApplicationRequests3xx": 60,
+                      "ApplicationRequests4xx": 60,
+                      "ApplicationRequests5xx": 60,
+                      "ApplicationRequestsTotal": 60,
+                      "CPUIdle": 60,
+                      "CPUIowait": 60,
+                      "CPUIrq": 60,
+                      "CPUNice": 60,
+                      "CPUSoftirq": 60,
+                      "CPUSystem": 60,
+                      "CPUUser": 60,
+                      "InstanceHealth": 60,
+                      "LoadAverage1min": 60,
+                      "LoadAverage5min": 60,
+                      "RootFilesystemUtil": 60
+                    },
+                    "Environment": {
+                      "ApplicationLatencyP10": 60,
+                      "ApplicationLatencyP50": 60,
+                      "ApplicationLatencyP75": 60,
+                      "ApplicationLatencyP85": 60,
+                      "ApplicationLatencyP90": 60,
+                      "ApplicationLatencyP95": 60,
+                      "ApplicationLatencyP99": 60,
+                      "ApplicationLatencyP99.9": 60,
+                      "ApplicationRequests2xx": 60,
+                      "ApplicationRequests3xx": 60,
+                      "ApplicationRequests4xx": 60,
+                      "ApplicationRequests5xx": 60,
+                      "ApplicationRequestsTotal": 60,
+                      "InstancesDegraded": 60,
+                      "InstancesInfo": 60,
+                      "InstancesNoData": 60,
+                      "InstancesOk": 60,
+                      "InstancesPending": 60,
+                      "InstancesSevere": 60,
+                      "InstancesUnknown": 60,
+                      "InstancesWarning": 60
+                    }
+                  },
+                  "Rules": {
+                    "Environment": {
+                      "Application": {
+                        "ApplicationRequests4xx": {
+                          "Enabled": false
+                        }
+                      }
+                    }
+                  }
+                }'
+
+        # -- VPC
+
+      - Namespace: aws:ec2:vpc
+        OptionName: VPCId
+        Value: !Ref VPC
+
+      - Namespace: aws:ec2:vpc
+        OptionName: Subnets
+        Value:
+          "Fn::Join":
+          - ','
+          - - !Ref PrivateSubnetA
+            - !Ref PrivateSubnetB
+            - !Ref PrivateSubnetC
+
+      - Namespace: aws:ec2:vpc
+        OptionName: ELBSubnets
+        Value:
+          "Fn::Join":
+          - ','
+          - - !Ref PublicSubnetA
+            - !Ref PublicSubnetB
+            - !Ref PublicSubnetC
+
+      - Namespace: aws:elbv2:listener:default
+        OptionName: ListenerEnabled
+        Value: true
+
+      - Namespace: aws:elbv2:loadbalancer
+        OptionName: SecurityGroups
+        Value: !Ref ELBSecurityGroup
+
+      - Namespace: aws:elbv2:loadbalancer
+        OptionName: ManagedSecurityGroup
+        Value: !Ref ELBSecurityGroup
+
+      - Namespace: aws:elbv2:listenerrule:default
+        OptionName: PathPatterns
+        Value: "/*"
+
+        # -- CloudWatch Logs
+
+      - Namespace: aws:elasticbeanstalk:cloudwatch:logs
+        OptionName: StreamLogs
+        Value: true
+
+      - Namespace: aws:elasticbeanstalk:cloudwatch:logs
+        OptionName: DeleteOnTerminate
+        Value: true
+
+        # -- Environment Variables
+
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: AWS_REGION
+        Value: !Ref AWS::Region
+
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: TARGET_URL
+        Value: !Ref TargetUrl
+
+  # -- IAM
+
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  AppPolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: App
+      Roles:
+      - !Ref AppRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Action: "*"
+            Resource: "*"
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+      - !Ref AppRole
+
+Outputs:
+
+  # -- Elastic Beanstalk
+
+  EnvironmentURL:
+    Description: Environment URL
+    Value: !GetAtt Environment.EndpointURL
+    Export:
+      Name: !Sub "${AWS::StackName}-EnvironmentURL"
+
+
+  # -- CloudFormation Stack
+
+  Name:
+    Description: Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub ${AWS::StackName}-Name
+
+  # -- VPC
+
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcID"
+
+  VpcCidr:
+    Description: VPC CIDR Block
+    Value: !FindInMap [ CIDRMap, VPC, CIDR ]
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcCidr"
+
+  PublicSubnetA:
+    Description: Public Subnet A ID
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnetAID"
+
+  PublicSubnetB:
+    Description: Public Subnet B ID
+    Value: !Ref PublicSubnetB
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnetBID"
+
+  PublicSubnetC:
+    Description: Public Subnet C ID
+    Value: !Ref PublicSubnetC
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnetCID"
+
+  PrivateSubnetA:
+    Description: Private Subnet A ID
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetAID"
+
+  PrivateSubnetB:
+    Description: Private Subnet B ID
+    Value: !Ref PrivateSubnetB
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetBID"
+
+  PrivateSubnetC:
+    Description: Private Subnet C ID
+    Value: !Ref PrivateSubnetC
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetCID"
+
+  ELBSecurityGroup:
+    Description: Security Group ID for Internet-facing ELB
+    Value: !GetAtt ELBSecurityGroup.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-ELBSecurityGroupID"
+
+  AppSecurityGroup:
+    Description: Security Group ID for app behind ELB
+    Value: !GetAtt AppSecurityGroup.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-AppSecurityGroupID"
