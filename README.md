@@ -14,12 +14,12 @@ Essentially, this repo automates the manual setup and deployment procedure of [e
 
 ## Requirements
 
-* Python >=3.6
+* Python >=2.7 (using Python 3.6 seemed to cause some issues with AWS EB CLI, see Makefile for details)
 * [AWS CLI](https://aws.amazon.com/cli/)
 * [AWS Elastic Beanstalk CLI](http://docs.aws.amazon.com/elasticbeanstalk/latest/dg/eb-cli3-install.html)
 * a valid credential profile in `~aws/.credentials`
 
-To install the CLI tools in a virtualenv through `pip3`:
+To install the CLI tools in a virtualenv through `pip`:
 
     make install-tools
 
